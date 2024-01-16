@@ -79,6 +79,10 @@ class Item():
 
     _itemname_prefix = 'items.'     # prefix for scheduler names
 
+    # constants for the optional item monitor
+    _monitor_template = '"{id}";"{name}";"{itemtype}";"{value}";"{mvalue}";"{lvalue}";"{mlvalue}";"{caller}";"{source}";"{dest}"'
+    _monitor_level = logging.getLevelName('INFO')
+
     def __init__(self, smarthome, parent, path, config, items_instance=None):
 
         global _items_instance
@@ -185,6 +189,24 @@ class Item():
             self._change_logger = logger.info
         else:
             self._change_logger = logger.debug
+
+        #############################################################
+        # Allow monitoring of all item changes to separate logger
+        #############################################################
+        self._monitor_logger = None
+        self._monitor_template = Item._monitor_template
+        self._monitor_level = Item._monitor_level
+        if hasattr(smarthome, '_item_monitor'):
+            config_attr = getattr(smarthome, '_item_monitor')
+            self._monitor_logger = logging.getLogger(str(config_attr))
+            if hasattr(smarthome, '_item_monitor_level'):
+                config_attr = getattr(smarthome, '_item_monitor_level')
+                self._monitor_level = logging.getLevelName(str(config_attr))
+            if hasattr(smarthome, '_item_monitor_template'):
+                config_attr = getattr(smarthome, '_item_monitor_template')
+                self._monitor_template = str(config_attr)
+            if self._monitor_logger.level == 0:
+                self._monitor_logger.setLevel(self._monitor_level)
 
         #############################################################
         # Initialize attribute assignment compatibility
@@ -1454,6 +1476,50 @@ class Item():
         return txt
 
 
+    def _monitor_build_text(self, value, caller, source=None, dest=None):
+
+        try:
+            mvalue = self._log_mapping.get(value, value)
+        except Exception as e:
+            mvalue = value
+
+        lvalue = self.property.last_value
+        try:
+            mlvalue = self._log_mapping.get(lvalue, lvalue)
+        except Exception as e:
+            mlvalue = lvalue
+
+        if self.__parent == _items_instance:
+            pname = None
+            pid = None
+        else:
+            pname = self.__parent._name
+            pid = self.__parent._path
+
+        id = self._path
+        name = self._name
+        itemtype = self._type
+        age = round(self._get_last_change_age(), 2)
+        sh = self._sh
+
+        shtime = self.shtime
+        time = shtime.now().strftime("%H:%M:%S")
+        date = shtime.now().strftime("%d.%m.%Y")
+        stamp = shtime.now().timestamp()
+        now = str(shtime.now())
+
+        import math
+        import lib.userfunctions as uf
+        env = lib.env
+
+        try:
+            txt = eval(f"f'{self._monitor_template}'")
+        except Exception as e:
+            logger.error(f"{id}: Invalid item_monitor template ' {self._monitor_template}' - (Exception: {e})")
+            txt = None
+
+        return txt
+
     def _log_on_change(self, value, caller, source=None, dest=None):
         """
         Write log, if Item has attribute log_change set
@@ -1541,6 +1607,12 @@ class Item():
             # log every item change to standard logger, if level is DEBUG
             # log with level INFO, if 'item_change_log' is set in etc/smarthome.yaml
             self._change_logger("Item {} = {} via {} {} {}".format(self._path, value, caller, source, dest))
+
+            # Log every item change to a separate monitor logger
+            if self._monitor_logger is not None:
+                txt = self._monitor_build_text(value, caller, source, dest)
+                if txt is not None:
+                    self._monitor_logger.log(self._monitor_level, txt)
 
             # Write item value to log, if Item has attribute log_change set
             self._log_on_change(value, caller, source, dest)
